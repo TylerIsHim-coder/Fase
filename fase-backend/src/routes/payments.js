@@ -130,8 +130,8 @@ router.post('/create-connected-account', requireAuth, async (req, res) => {
 
 /**
  * POST /create-payment-intent
- * Developer locks a deal — payment is authorized and held until release (manual capture).
- * On capture, Stripe routes 85% to influencer and 15% application fee to Fase.
+ * Developer pays on pitch accept — funds capture immediately and split via Connect
+ * (85% to influencer, 15% application fee to Fase).
  */
 router.post('/create-payment-intent', requireAuth, async (req, res) => {
   try {
@@ -188,56 +188,6 @@ router.post('/create-payment-intent', requireAuth, async (req, res) => {
   } catch (error) {
     console.error('[create-payment-intent]', error);
     return res.status(500).json({ error: error.message ?? 'Failed to create payment intent' });
-  }
-});
-
-/**
- * POST /release-payment
- * Developer confirms the influencer posted — captures escrowed funds.
- * Influencer receives 85%; Fase keeps 15% via application_fee_amount.
- */
-router.post('/release-payment', requireAuth, async (req, res) => {
-  try {
-    const stripe = getStripe();
-    const { paymentIntentId } = req.body ?? {};
-
-    if (!paymentIntentId) {
-      return res.status(400).json({ error: 'paymentIntentId is required' });
-    }
-
-    const existing = await stripe.paymentIntents.retrieve(paymentIntentId);
-
-    if (existing.metadata?.developerId && existing.metadata.developerId !== req.user.uid) {
-      return res.status(403).json({ error: 'Not authorized to release this payment' });
-    }
-
-    if (existing.status === 'succeeded') {
-      return res.json({
-        status: 'already_released',
-        paymentIntentId: existing.id,
-        amount: existing.amount,
-        applicationFeeAmount: existing.application_fee_amount,
-      });
-    }
-
-    if (existing.status !== 'requires_capture') {
-      return res.status(400).json({
-        error: `Payment cannot be released in status: ${existing.status}`,
-      });
-    }
-
-    const captured = await stripe.paymentIntents.capture(paymentIntentId);
-    const fees = calculateFees(captured.amount);
-
-    return res.json({
-      status: 'released',
-      paymentIntentId: captured.id,
-      amount: captured.amount,
-      fees,
-    });
-  } catch (error) {
-    console.error('[release-payment]', error);
-    return res.status(500).json({ error: error.message ?? 'Failed to release payment' });
   }
 });
 
@@ -333,54 +283,6 @@ router.post('/create-express-login-link', requireAuth, async (req, res) => {
   } catch (error) {
     console.error('[create-express-login-link]', error);
     return res.status(500).json({ error: error.message ?? 'Failed to create Stripe login link' });
-  }
-});
-
-/**
- * POST /claim-deal-payment
- * Captures a held payment into the influencer's Stripe balance when eligible.
- */
-router.post('/claim-deal-payment', requireAuth, async (req, res) => {
-  try {
-    const stripe = getStripe();
-    const { paymentIntentId } = req.body ?? {};
-
-    if (!paymentIntentId) {
-      return res.status(400).json({ error: 'paymentIntentId is required' });
-    }
-
-    const accountId = await getUserStripeAccountId(req.user.uid);
-    if (!accountId) {
-      return res.status(400).json({ error: 'Connect Stripe on your profile first.' });
-    }
-
-    const existing = await stripe.paymentIntents.retrieve(paymentIntentId);
-
-    if (existing.metadata?.influencerStripeAccountId !== accountId) {
-      return res.status(403).json({ error: 'Not authorized to claim this payment' });
-    }
-
-    if (existing.status === 'succeeded') {
-      return res.json({ status: 'already_claimed', paymentIntentId: existing.id });
-    }
-
-    if (existing.status !== 'requires_capture') {
-      return res.status(400).json({
-        error: `Payment cannot be claimed in status: ${existing.status}`,
-      });
-    }
-
-    const captured = await stripe.paymentIntents.capture(paymentIntentId);
-    const fees = calculateFees(captured.amount);
-
-    return res.json({
-      status: 'claimed',
-      paymentIntentId: captured.id,
-      fees,
-    });
-  } catch (error) {
-    console.error('[claim-deal-payment]', error);
-    return res.status(500).json({ error: error.message ?? 'Failed to claim deal payment' });
   }
 });
 

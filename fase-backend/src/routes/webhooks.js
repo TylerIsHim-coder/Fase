@@ -1,25 +1,66 @@
 import { Router } from 'express';
 
 import { getStripe } from '../config/stripe.js';
+import {
+  markDealPaymentRefunded,
+  markDealPaymentSucceeded,
+  recordPackPurchase,
+  updateConnectAccountStatus,
+} from '../lib/firestoreDeals.js';
 
 const router = Router();
 
-function handlePaymentIntentSucceeded(paymentIntent) {
+async function handlePaymentIntentSucceeded(paymentIntent) {
   console.info('[webhook] payment_intent.succeeded', {
     id: paymentIntent.id,
     amount: paymentIntent.amount,
     dealId: paymentIntent.metadata?.dealId,
     developerId: paymentIntent.metadata?.developerId,
   });
+
+  if (paymentIntent.metadata?.type === 'campaign_pack') {
+    await recordPackPurchase(paymentIntent);
+    return;
+  }
+
+  const dealId = paymentIntent.metadata?.dealId;
+  if (dealId) {
+    await markDealPaymentSucceeded(dealId, paymentIntent.id);
+  }
 }
 
-function handleAccountUpdated(account) {
+async function handlePaymentIntentCanceled(paymentIntent) {
+  const dealId = paymentIntent.metadata?.dealId;
+  if (dealId) {
+    await markDealPaymentRefunded(dealId);
+  }
+}
+
+async function handleChargeRefunded(charge) {
+  const paymentIntentId =
+    typeof charge.payment_intent === 'string'
+      ? charge.payment_intent
+      : charge.payment_intent?.id;
+
+  if (!paymentIntentId) return;
+
+  const stripe = getStripe();
+  const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+  const dealId = paymentIntent.metadata?.dealId;
+  if (dealId) {
+    await markDealPaymentRefunded(dealId);
+  }
+}
+
+async function handleAccountUpdated(account) {
   console.info('[webhook] account.updated', {
     id: account.id,
     chargesEnabled: account.charges_enabled,
     payoutsEnabled: account.payouts_enabled,
     detailsSubmitted: account.details_submitted,
   });
+
+  await updateConnectAccountStatus(account.id, account);
 }
 
 function handleTransferCreated(transfer) {
@@ -30,7 +71,7 @@ function handleTransferCreated(transfer) {
   });
 }
 
-router.post('/webhook', async (req, res) => {
+router.post('/', async (req, res) => {
   const stripe = getStripe();
   const signature = req.headers['stripe-signature'];
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -52,10 +93,16 @@ router.post('/webhook', async (req, res) => {
   try {
     switch (event.type) {
       case 'payment_intent.succeeded':
-        handlePaymentIntentSucceeded(event.data.object);
+        await handlePaymentIntentSucceeded(event.data.object);
+        break;
+      case 'payment_intent.canceled':
+        await handlePaymentIntentCanceled(event.data.object);
+        break;
+      case 'charge.refunded':
+        await handleChargeRefunded(event.data.object);
         break;
       case 'account.updated':
-        handleAccountUpdated(event.data.object);
+        await handleAccountUpdated(event.data.object);
         break;
       case 'transfer.created':
         handleTransferCreated(event.data.object);

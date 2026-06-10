@@ -21,6 +21,16 @@ function isTransferAlreadyExistsError(error) {
   );
 }
 
+function isInsufficientFundsError(error) {
+  const message = error?.message ?? '';
+  return message.includes('insufficient available funds');
+}
+
+function rejectsSourceTransactionParam(error) {
+  const message = error?.message ?? '';
+  return message.includes('unknown parameter') && message.includes('source_transaction');
+}
+
 /**
  * Escrow payments need a manual transfer on post confirm. Legacy destination
  * charges already moved funds when the developer paid — detect and skip.
@@ -47,6 +57,26 @@ async function findExistingDealTransfer(stripe, { dealId, chargeId, influencerSt
   return null;
 }
 
+async function createDealTransfer(stripe, input, { useSourceTransaction }) {
+  const payload = {
+    amount: input.influencerPayoutAmount,
+    currency: input.currency,
+    destination: input.influencerStripeAccountId,
+    transfer_group: input.dealId,
+    metadata: {
+      dealId: input.dealId,
+      paymentIntentId: input.paymentIntentId,
+      developerId: input.developerId,
+    },
+  };
+
+  if (useSourceTransaction) {
+    payload.source_transaction = input.chargeId;
+  }
+
+  return stripe.transfers.create(payload);
+}
+
 async function resolveInfluencerTransfer(
   stripe,
   {
@@ -69,42 +99,66 @@ async function resolveInfluencerTransfer(
     return { transferId: existingTransferId, alreadyTransferred: true };
   }
 
-  try {
-    const transfer = await stripe.transfers.create({
-      amount: influencerPayoutAmount,
-      currency,
-      destination: influencerStripeAccountId,
-      transfer_group: dealId,
-      metadata: {
-        dealId,
-        paymentIntentId,
-        developerId,
-      },
-    });
-
-    return { transferId: transfer.id, alreadyTransferred: false };
-  } catch (error) {
-    if (!isTransferAlreadyExistsError(error)) {
-      throw error;
-    }
-
-    const retryTransferId = await findExistingDealTransfer(stripe, {
+  const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+  if (paymentIntent.transfer_data?.destination) {
+    console.info('[release-deal-payout] Legacy destination charge — payout already sent at payment', {
       dealId,
-      chargeId,
-      influencerStripeAccountId,
+      paymentIntentId,
     });
-
-    if (retryTransferId) {
-      return { transferId: retryTransferId, alreadyTransferred: true };
-    }
-
-    console.info('[release-deal-payout] Legacy destination charge — marking released without transfer', {
-      dealId,
-      chargeId,
-    });
-
     return { transferId: null, alreadyTransferred: true };
   }
+
+  const input = {
+    chargeId,
+    dealId,
+    paymentIntentId,
+    developerId,
+    influencerStripeAccountId,
+    influencerPayoutAmount,
+    currency,
+  };
+
+  let useSourceTransaction = true;
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const transfer = await createDealTransfer(stripe, input, { useSourceTransaction });
+      return { transferId: transfer.id, alreadyTransferred: false };
+    } catch (error) {
+      if (rejectsSourceTransactionParam(error)) {
+        useSourceTransaction = false;
+        continue;
+      }
+
+      if (isTransferAlreadyExistsError(error)) {
+        const retryTransferId = await findExistingDealTransfer(stripe, {
+          dealId,
+          chargeId,
+          influencerStripeAccountId,
+        });
+        if (retryTransferId) {
+          return { transferId: retryTransferId, alreadyTransferred: true };
+        }
+        return { transferId: null, alreadyTransferred: true };
+      }
+
+      if (isInsufficientFundsError(error) && useSourceTransaction) {
+        useSourceTransaction = false;
+        continue;
+      }
+
+      if (isInsufficientFundsError(error)) {
+        const charge = await stripe.charges.retrieve(chargeId);
+        if (transferIdFromCharge(charge)) {
+          return { transferId: transferIdFromCharge(charge), alreadyTransferred: true };
+        }
+      }
+
+      throw error;
+    }
+  }
+
+  throw new Error('Could not release payout — try again in a few minutes.');
 }
 
 /**

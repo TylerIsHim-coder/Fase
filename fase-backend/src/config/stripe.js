@@ -8,7 +8,10 @@ export function getStripe() {
   }
 
   if (!stripeClient) {
-    stripeClient = new Stripe(process.env.STRIPE_SECRET_KEY);
+    // Pin a stable API version so Connect transfer params (e.g. source_transaction) stay supported.
+    stripeClient = new Stripe(process.env.STRIPE_SECRET_KEY, {
+      apiVersion: '2024-06-20',
+    });
   }
 
   return stripeClient;

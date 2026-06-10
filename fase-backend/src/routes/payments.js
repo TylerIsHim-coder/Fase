@@ -8,6 +8,94 @@ import { requireAuth } from '../middleware/auth.js';
 
 const router = Router();
 
+function transferIdFromCharge(charge) {
+  if (!charge?.transfer) return null;
+  return typeof charge.transfer === 'string' ? charge.transfer : charge.transfer.id;
+}
+
+function isTransferAlreadyExistsError(error) {
+  const message = error?.message ?? '';
+  return (
+    message.includes('already a transfer using this source') ||
+    message.includes('must not exceed the source amount')
+  );
+}
+
+/**
+ * Escrow payments need a manual transfer on post confirm. Legacy destination
+ * charges already moved funds when the developer paid — detect and skip.
+ */
+async function resolveInfluencerTransfer(
+  stripe,
+  {
+    chargeId,
+    dealId,
+    paymentIntentId,
+    developerId,
+    influencerStripeAccountId,
+    influencerPayoutAmount,
+    currency,
+  },
+) {
+  const charge = await stripe.charges.retrieve(chargeId);
+  const existingTransferId = transferIdFromCharge(charge);
+
+  if (existingTransferId) {
+    return { transferId: existingTransferId, alreadyTransferred: true };
+  }
+
+  const listed = await stripe.transfers.list({
+    source_transaction: chargeId,
+    limit: 10,
+  });
+
+  if (listed.data.length > 0) {
+    const match =
+      listed.data.find((transfer) => transfer.destination === influencerStripeAccountId) ??
+      listed.data[0];
+    return { transferId: match.id, alreadyTransferred: true };
+  }
+
+  try {
+    const transfer = await stripe.transfers.create({
+      amount: influencerPayoutAmount,
+      currency,
+      destination: influencerStripeAccountId,
+      source_transaction: chargeId,
+      metadata: {
+        dealId,
+        paymentIntentId,
+        developerId,
+      },
+    });
+
+    return { transferId: transfer.id, alreadyTransferred: false };
+  } catch (error) {
+    if (!isTransferAlreadyExistsError(error)) {
+      throw error;
+    }
+
+    const retry = await stripe.transfers.list({
+      source_transaction: chargeId,
+      limit: 10,
+    });
+
+    if (retry.data.length > 0) {
+      const match =
+        retry.data.find((transfer) => transfer.destination === influencerStripeAccountId) ??
+        retry.data[0];
+      return { transferId: match.id, alreadyTransferred: true };
+    }
+
+    console.info('[release-deal-payout] Legacy destination charge — marking released without transfer', {
+      dealId,
+      chargeId,
+    });
+
+    return { transferId: null, alreadyTransferred: true };
+  }
+}
+
 /**
  * GET /influencer-stripe-account/:influencerId
  * Developers use this to check if a creator can receive payouts.
@@ -253,24 +341,22 @@ router.post('/release-deal-payout', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'Payment charge not found' });
     }
 
-    const transfer = await stripe.transfers.create({
-      amount: influencerPayoutAmount,
+    const { transferId, alreadyTransferred } = await resolveInfluencerTransfer(stripe, {
+      chargeId,
+      dealId,
+      paymentIntentId: paymentIntent.id,
+      developerId: req.user.uid,
+      influencerStripeAccountId,
+      influencerPayoutAmount,
       currency: paymentIntent.currency ?? 'usd',
-      destination: influencerStripeAccountId,
-      source_transaction: chargeId,
-      metadata: {
-        dealId,
-        paymentIntentId: paymentIntent.id,
-        developerId: req.user.uid,
-      },
     });
 
-    await markDealPayoutReleased(dealId, transfer.id);
+    await markDealPayoutReleased(dealId, transferId);
 
     return res.json({
-      status: 'released',
+      status: alreadyTransferred ? 'already_transferred' : 'released',
       dealId,
-      transferId: transfer.id,
+      transferId,
       influencerPayoutAmount,
     });
   } catch (error) {

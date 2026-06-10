@@ -74,15 +74,17 @@ export async function markDealPayoutReleased(dealId, transferId) {
   if (!dealId) return;
 
   const { db, FieldValue } = getFirestoreBundle();
-  await db.collection(DEALS_COLLECTION).doc(dealId).set(
-    {
-      paymentStatus: 'released',
-      stripeTransferId: transferId,
-      payoutReleasedAt: FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp(),
-    },
-    { merge: true },
-  );
+  const payload = {
+    paymentStatus: 'released',
+    payoutReleasedAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+
+  if (transferId) {
+    payload.stripeTransferId = transferId;
+  }
+
+  await db.collection(DEALS_COLLECTION).doc(dealId).set(payload, { merge: true });
 }
 
 export async function markDealPaymentRefunded(dealId) {

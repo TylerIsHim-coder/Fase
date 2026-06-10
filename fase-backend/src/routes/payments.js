@@ -25,6 +25,28 @@ function isTransferAlreadyExistsError(error) {
  * Escrow payments need a manual transfer on post confirm. Legacy destination
  * charges already moved funds when the developer paid — detect and skip.
  */
+async function findExistingDealTransfer(stripe, { dealId, chargeId, influencerStripeAccountId }) {
+  const charge = await stripe.charges.retrieve(chargeId);
+  const fromCharge = transferIdFromCharge(charge);
+  if (fromCharge) {
+    return fromCharge;
+  }
+
+  const byGroup = await stripe.transfers.list({
+    transfer_group: dealId,
+    limit: 10,
+  });
+
+  if (byGroup.data.length > 0) {
+    const match =
+      byGroup.data.find((transfer) => transfer.destination === influencerStripeAccountId) ??
+      byGroup.data[0];
+    return match.id;
+  }
+
+  return null;
+}
+
 async function resolveInfluencerTransfer(
   stripe,
   {
@@ -37,23 +59,14 @@ async function resolveInfluencerTransfer(
     currency,
   },
 ) {
-  const charge = await stripe.charges.retrieve(chargeId);
-  const existingTransferId = transferIdFromCharge(charge);
+  const existingTransferId = await findExistingDealTransfer(stripe, {
+    dealId,
+    chargeId,
+    influencerStripeAccountId,
+  });
 
   if (existingTransferId) {
     return { transferId: existingTransferId, alreadyTransferred: true };
-  }
-
-  const listed = await stripe.transfers.list({
-    source_transaction: chargeId,
-    limit: 10,
-  });
-
-  if (listed.data.length > 0) {
-    const match =
-      listed.data.find((transfer) => transfer.destination === influencerStripeAccountId) ??
-      listed.data[0];
-    return { transferId: match.id, alreadyTransferred: true };
   }
 
   try {
@@ -61,7 +74,7 @@ async function resolveInfluencerTransfer(
       amount: influencerPayoutAmount,
       currency,
       destination: influencerStripeAccountId,
-      source_transaction: chargeId,
+      transfer_group: dealId,
       metadata: {
         dealId,
         paymentIntentId,
@@ -75,16 +88,14 @@ async function resolveInfluencerTransfer(
       throw error;
     }
 
-    const retry = await stripe.transfers.list({
-      source_transaction: chargeId,
-      limit: 10,
+    const retryTransferId = await findExistingDealTransfer(stripe, {
+      dealId,
+      chargeId,
+      influencerStripeAccountId,
     });
 
-    if (retry.data.length > 0) {
-      const match =
-        retry.data.find((transfer) => transfer.destination === influencerStripeAccountId) ??
-        retry.data[0];
-      return { transferId: match.id, alreadyTransferred: true };
+    if (retryTransferId) {
+      return { transferId: retryTransferId, alreadyTransferred: true };
     }
 
     console.info('[release-deal-payout] Legacy destination charge — marking released without transfer', {
@@ -253,6 +264,7 @@ router.post('/create-payment-intent', requireAuth, async (req, res) => {
       currency,
       capture_method: 'automatic',
       automatic_payment_methods: { enabled: true },
+      transfer_group: dealId,
       description: description ?? `Fase deal ${dealId}`,
       metadata: {
         dealId,

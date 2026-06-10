@@ -2,6 +2,7 @@ import { Router } from 'express';
 
 import { getPublishableKey, getStripe } from '../config/stripe.js';
 import { calculateFees } from '../lib/fees.js';
+import { getDealForPayoutRelease, markDealPayoutReleased } from '../lib/firestoreDeals.js';
 import { getUserStripeAccountId, saveUserStripeAccountId } from '../lib/firestoreUsers.js';
 import { requireAuth } from '../middleware/auth.js';
 
@@ -130,8 +131,8 @@ router.post('/create-connected-account', requireAuth, async (req, res) => {
 
 /**
  * POST /create-payment-intent
- * Developer pays on pitch accept — funds capture immediately and split via Connect
- * (85% to influencer, 15% application fee to Fase).
+ * Developer pays after video approval — funds capture to Fase immediately.
+ * Influencer payout is released separately when the developer confirms the post.
  */
 router.post('/create-payment-intent', requireAuth, async (req, res) => {
   try {
@@ -164,10 +165,6 @@ router.post('/create-payment-intent', requireAuth, async (req, res) => {
       currency,
       capture_method: 'automatic',
       automatic_payment_methods: { enabled: true },
-      application_fee_amount: fees.applicationFeeAmount,
-      transfer_data: {
-        destination: influencerStripeAccountId,
-      },
       description: description ?? `Fase deal ${dealId}`,
       metadata: {
         dealId,
@@ -188,6 +185,97 @@ router.post('/create-payment-intent', requireAuth, async (req, res) => {
   } catch (error) {
     console.error('[create-payment-intent]', error);
     return res.status(500).json({ error: error.message ?? 'Failed to create payment intent' });
+  }
+});
+
+/**
+ * POST /release-deal-payout
+ * Developer confirms post delivered — transfers held funds (85%) to the influencer.
+ */
+router.post('/release-deal-payout', requireAuth, async (req, res) => {
+  try {
+    const stripe = getStripe();
+    const { dealId } = req.body ?? {};
+
+    if (!dealId) {
+      return res.status(400).json({ error: 'dealId is required' });
+    }
+
+    const deal = await getDealForPayoutRelease(dealId);
+    if (!deal) {
+      return res.status(404).json({ error: 'Deal not found' });
+    }
+
+    if (deal.developerId !== req.user.uid) {
+      return res.status(403).json({ error: 'Not authorized to release this payout' });
+    }
+
+    if (!deal.paymentIntentId) {
+      return res.status(400).json({ error: 'Deal has no payment on file' });
+    }
+
+    if (deal.paymentStatus === 'released' || deal.paymentStatus === 'withdrawn') {
+      return res.json({
+        status: 'already_released',
+        dealId,
+        transferId: deal.stripeTransferId ?? null,
+      });
+    }
+
+    const paymentIntent = await stripe.paymentIntents.retrieve(deal.paymentIntentId);
+
+    if (paymentIntent.status !== 'succeeded') {
+      return res.status(400).json({
+        error: `Payment is not complete (status: ${paymentIntent.status})`,
+      });
+    }
+
+    const influencerStripeAccountId =
+      paymentIntent.metadata?.influencerStripeAccountId ?? deal.influencerStripeAccountId;
+    const influencerPayoutAmount = Number(
+      paymentIntent.metadata?.influencerPayoutAmount ?? deal.influencerPayoutAmount,
+    );
+
+    if (!influencerStripeAccountId) {
+      return res.status(400).json({ error: 'Influencer Stripe account is missing' });
+    }
+
+    if (!Number.isFinite(influencerPayoutAmount) || influencerPayoutAmount < 50) {
+      return res.status(400).json({ error: 'Invalid influencer payout amount' });
+    }
+
+    const chargeId =
+      typeof paymentIntent.latest_charge === 'string'
+        ? paymentIntent.latest_charge
+        : paymentIntent.latest_charge?.id;
+
+    if (!chargeId) {
+      return res.status(400).json({ error: 'Payment charge not found' });
+    }
+
+    const transfer = await stripe.transfers.create({
+      amount: influencerPayoutAmount,
+      currency: paymentIntent.currency ?? 'usd',
+      destination: influencerStripeAccountId,
+      source_transaction: chargeId,
+      metadata: {
+        dealId,
+        paymentIntentId: paymentIntent.id,
+        developerId: req.user.uid,
+      },
+    });
+
+    await markDealPayoutReleased(dealId, transfer.id);
+
+    return res.json({
+      status: 'released',
+      dealId,
+      transferId: transfer.id,
+      influencerPayoutAmount,
+    });
+  } catch (error) {
+    console.error('[release-deal-payout]', error);
+    return res.status(500).json({ error: error.message ?? 'Failed to release deal payout' });
   }
 });
 

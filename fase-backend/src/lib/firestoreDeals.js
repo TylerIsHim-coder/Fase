@@ -26,13 +26,59 @@ export async function markDealPaymentSucceeded(dealId, paymentIntentId) {
     return;
   }
 
+  const existing = snapshot.data() ?? {};
+  if (existing.paymentStatus === 'withdrawn' || existing.cashedOutAt) {
+    return;
+  }
+
   await dealRef.set(
     {
       paymentIntentId,
-      paymentStatus: 'released',
+      paymentStatus: 'held',
       developerReviewStatus: 'accepted',
       type: 'active',
       status: 'Post by deadline',
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true },
+  );
+}
+
+export async function getDealForPayoutRelease(dealId) {
+  if (!dealId) return null;
+
+  const { db } = getFirestoreBundle();
+  const snapshot = await db.collection(DEALS_COLLECTION).doc(dealId).get();
+
+  if (!snapshot.exists) {
+    return null;
+  }
+
+  const data = snapshot.data() ?? {};
+  return {
+    dealId,
+    developerId: data.developerId ? String(data.developerId) : undefined,
+    paymentIntentId: data.paymentIntentId ? String(data.paymentIntentId) : undefined,
+    paymentStatus: data.paymentStatus ? String(data.paymentStatus) : undefined,
+    stripeTransferId: data.stripeTransferId ? String(data.stripeTransferId) : undefined,
+    influencerStripeAccountId: data.influencerStripeAccountId
+      ? String(data.influencerStripeAccountId)
+      : undefined,
+    influencerPayoutAmount: data.influencerPayoutAmount
+      ? Number(data.influencerPayoutAmount)
+      : undefined,
+  };
+}
+
+export async function markDealPayoutReleased(dealId, transferId) {
+  if (!dealId) return;
+
+  const { db, FieldValue } = getFirestoreBundle();
+  await db.collection(DEALS_COLLECTION).doc(dealId).set(
+    {
+      paymentStatus: 'released',
+      stripeTransferId: transferId,
+      payoutReleasedAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
     },
     { merge: true },

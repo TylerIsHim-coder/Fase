@@ -78,6 +78,7 @@ router.post('/send-push', requireAuth, async (req, res) => {
 
     const tokens = await getExpoPushTokens(recipientUserId);
     if (tokens.length === 0) {
+      console.info('[send-push] no tokens for user', recipientUserId);
       return res.json({ sent: 0, reason: 'no_tokens' });
     }
 
@@ -95,6 +96,13 @@ router.post('/send-push', requireAuth, async (req, res) => {
     if (result.invalidTokens.length > 0) {
       await removeExpoPushTokens(recipientUserId, result.invalidTokens);
     }
+
+    console.info('[send-push]', {
+      recipientUserId,
+      tokenCount: tokens.length,
+      sent: result.sent,
+      type: data?.type,
+    });
 
     return res.json({ sent: result.sent });
   } catch (error) {

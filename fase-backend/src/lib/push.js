@@ -37,6 +37,8 @@ export async function sendExpoPushNotifications(tokens, { title, body, data = {}
         return;
       }
 
+      console.warn('[push] Expo receipt error:', receipt.message, receipt.details);
+
       const token = chunk[index]?.to;
       if (
         token &&

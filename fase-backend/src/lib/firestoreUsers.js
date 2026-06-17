@@ -27,3 +27,44 @@ export async function saveUserStripeAccountId(userId, stripeAccountId) {
     { merge: true },
   );
 }
+
+export async function getExpoPushTokens(userId) {
+  const firebase = initFirebase();
+  if (!firebase || !userId) return [];
+
+  const snapshot = await firebase.firestore().collection('users').doc(userId).get();
+  if (!snapshot.exists) return [];
+
+  const tokens = snapshot.data()?.expoPushTokens;
+  if (!Array.isArray(tokens)) return [];
+
+  return tokens.filter((token) => typeof token === 'string' && token.length > 0);
+}
+
+export async function addExpoPushToken(userId, token) {
+  const firebase = initFirebase();
+  if (!firebase) {
+    throw new Error('Firebase is not configured');
+  }
+
+  await firebase.firestore().collection('users').doc(userId).set(
+    {
+      expoPushTokens: firebase.firestore.FieldValue.arrayUnion(token),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true },
+  );
+}
+
+export async function removeExpoPushTokens(userId, tokens) {
+  const firebase = initFirebase();
+  if (!firebase || !userId || !tokens?.length) return;
+
+  await firebase.firestore().collection('users').doc(userId).set(
+    {
+      expoPushTokens: firebase.firestore.FieldValue.arrayRemove(...tokens),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true },
+  );
+}

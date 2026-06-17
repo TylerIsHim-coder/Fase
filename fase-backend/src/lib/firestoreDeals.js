@@ -44,6 +44,24 @@ export async function markDealPaymentSucceeded(dealId, paymentIntentId) {
   );
 }
 
+export async function getDealParticipants(dealId) {
+  if (!dealId) return null;
+
+  const { db } = getFirestoreBundle();
+  const snapshot = await db.collection(DEALS_COLLECTION).doc(dealId).get();
+
+  if (!snapshot.exists) {
+    return null;
+  }
+
+  const data = snapshot.data() ?? {};
+  return {
+    dealId,
+    developerId: data.developerId ? String(data.developerId) : undefined,
+    influencerId: data.influencerId ? String(data.influencerId) : undefined,
+  };
+}
+
 export async function getDealForPayoutRelease(dealId) {
   if (!dealId) return null;
 

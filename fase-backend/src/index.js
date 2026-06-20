@@ -8,6 +8,7 @@ import adminRouter from './routes/admin.js';
 import healthRouter from './routes/health.js';
 import paymentsRouter from './routes/payments.js';
 import pushRouter from './routes/push.js';
+import tiktokRouter from './routes/tiktok.js';
 import validateRouter from './routes/validate.js';
 import webhooksRouter from './routes/webhooks.js';
 
@@ -26,6 +27,7 @@ app.use(express.json());
 app.use(healthRouter);
 app.use(paymentsRouter);
 app.use(pushRouter);
+app.use(tiktokRouter);
 app.use(validateRouter);
 app.use(adminRouter);
 

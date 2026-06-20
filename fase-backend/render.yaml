@@ -21,3 +21,7 @@ services:
         sync: false
       - key: FIREBASE_SERVICE_ACCOUNT
         sync: false
+      - key: TIKTOK_CLIENT_KEY
+        sync: false
+      - key: TIKTOK_CLIENT_SECRET
+        sync: false

@@ -13,6 +13,8 @@ services:
         value: 10000
       - key: APP_URL
         sync: false
+      - key: STRIPE_CONNECT_APP_URL
+        value: https://fase-6c49a.web.app
       - key: STRIPE_SECRET_KEY
         sync: false
       - key: STRIPE_PUBLISHABLE_KEY
@@ -24,4 +26,8 @@ services:
       - key: TIKTOK_CLIENT_KEY
         sync: false
       - key: TIKTOK_CLIENT_SECRET
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
         sync: false

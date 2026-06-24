@@ -5,6 +5,8 @@ import express from 'express';
 
 import { initFirebase } from './config/firebase.js';
 import adminRouter from './routes/admin.js';
+import connectRouter from './routes/connect.js';
+import contestsRouter from './routes/contests.js';
 import healthRouter from './routes/health.js';
 import paymentsRouter from './routes/payments.js';
 import pushRouter from './routes/push.js';
@@ -25,6 +27,8 @@ app.use('/webhook', express.raw({ type: 'application/json' }), webhooksRouter);
 app.use(express.json());
 
 app.use(healthRouter);
+app.use(connectRouter);
+app.use(contestsRouter);
 app.use(paymentsRouter);
 app.use(pushRouter);
 app.use(tiktokRouter);

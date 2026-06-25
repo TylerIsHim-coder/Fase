@@ -262,7 +262,7 @@ router.post('/create-payment-intent', requireAuth, async (req, res) => {
 
 /**
  * POST /release-deal-payout
- * Developer confirms post delivered — transfers held funds (95%) to the influencer.
+ * Developer confirms post delivered — transfers held funds (92%) to the influencer.
  */
 router.post('/release-deal-payout', requireAuth, async (req, res) => {
   try {

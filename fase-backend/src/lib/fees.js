@@ -1,5 +1,5 @@
-/** Fase platform fee — 5% of deal amount */
-export const PLATFORM_FEE_PERCENT = 0.05;
+/** Fase platform fee — 8% of deal amount */
+export const PLATFORM_FEE_PERCENT = 0.08;
 
 export function calculateFees(amountCents) {
   const applicationFeeAmount = Math.round(amountCents * PLATFORM_FEE_PERCENT);

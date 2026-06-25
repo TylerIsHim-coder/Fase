@@ -13,6 +13,17 @@ export async function getUserStripeAccountId(userId) {
   return typeof data?.stripeAccountId === 'string' ? data.stripeAccountId : null;
 }
 
+export async function getUserEmail(userId) {
+  const firebase = initFirebase();
+  if (!firebase || !userId) return null;
+
+  const snapshot = await firebase.firestore().collection('users').doc(userId).get();
+  if (!snapshot.exists) return null;
+
+  const email = snapshot.data()?.email;
+  return typeof email === 'string' && email.length > 0 ? email : null;
+}
+
 export async function saveUserStripeAccountId(userId, stripeAccountId) {
   const firebase = initFirebase();
   if (!firebase) {

@@ -35,6 +35,7 @@ export async function markDealPaymentSucceeded(dealId, paymentIntentId) {
     {
       paymentIntentId,
       paymentStatus: 'held',
+      paidAt: FieldValue.serverTimestamp(),
       developerReviewStatus: 'accepted',
       type: 'active',
       status: 'Post by deadline',
@@ -76,6 +77,7 @@ export async function getDealForPayoutRelease(dealId) {
   return {
     dealId,
     developerId: data.developerId ? String(data.developerId) : undefined,
+    influencerId: data.influencerId ? String(data.influencerId) : undefined,
     paymentIntentId: data.paymentIntentId ? String(data.paymentIntentId) : undefined,
     paymentStatus: data.paymentStatus ? String(data.paymentStatus) : undefined,
     stripeTransferId: data.stripeTransferId ? String(data.stripeTransferId) : undefined,
@@ -85,10 +87,15 @@ export async function getDealForPayoutRelease(dealId) {
     influencerPayoutAmount: data.influencerPayoutAmount
       ? Number(data.influencerPayoutAmount)
       : undefined,
+    paidAt: data.paidAt,
+    postAutoReleaseAt: data.postAutoReleaseAt,
+    completedAt: data.completedAt,
+    type: data.type ? String(data.type) : undefined,
+    status: data.status ? String(data.status) : undefined,
   };
 }
 
-export async function markDealPayoutReleased(dealId, transferId) {
+export async function markDealPayoutReleased(dealId, transferId, options = {}) {
   if (!dealId) return;
 
   const { db, FieldValue } = getFirestoreBundle();
@@ -100,6 +107,16 @@ export async function markDealPayoutReleased(dealId, transferId) {
 
   if (transferId) {
     payload.stripeTransferId = transferId;
+  }
+
+  if (options.markCompleted) {
+    payload.type = 'completed';
+    payload.status = 'Completed';
+    payload.statusLabel = 'Completed';
+    payload.completedAt = FieldValue.serverTimestamp();
+    if (options.autoReleased) {
+      payload.postAutoReleased = true;
+    }
   }
 
   await db.collection(DEALS_COLLECTION).doc(dealId).set(payload, { merge: true });
@@ -123,20 +140,31 @@ export async function updateConnectAccountStatus(stripeAccountId, account) {
   if (!stripeAccountId) return;
 
   const { db, FieldValue } = getFirestoreBundle();
-  const usersSnapshot = await db
-    .collection(USERS_COLLECTION)
-    .where('stripeAccountId', '==', stripeAccountId)
-    .limit(1)
-    .get();
+  const firebaseUid = account.metadata?.firebaseUid;
+  let userRef = null;
 
-  if (usersSnapshot.empty) {
+  if (firebaseUid) {
+    userRef = db.collection(USERS_COLLECTION).doc(firebaseUid);
+  } else {
+    const usersSnapshot = await db
+      .collection(USERS_COLLECTION)
+      .where('stripeAccountId', '==', stripeAccountId)
+      .limit(1)
+      .get();
+
+    if (!usersSnapshot.empty) {
+      userRef = usersSnapshot.docs[0].ref;
+    }
+  }
+
+  if (!userRef) {
     console.warn('[firestoreDeals] No user found for Stripe account:', stripeAccountId);
     return;
   }
 
-  const userRef = usersSnapshot.docs[0].ref;
   await userRef.set(
     {
+      stripeAccountId,
       stripeChargesEnabled: Boolean(account.charges_enabled),
       stripePayoutsEnabled: Boolean(account.payouts_enabled),
       stripeDetailsSubmitted: Boolean(account.details_submitted),

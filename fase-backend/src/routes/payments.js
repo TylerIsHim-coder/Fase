@@ -2,163 +2,54 @@ import { Router } from 'express';
 
 import { getPublishableKey, getStripe } from '../config/stripe.js';
 import { calculateFees } from '../lib/fees.js';
-import { getDealForPayoutRelease, markDealPayoutReleased } from '../lib/firestoreDeals.js';
+import {
+  isDealEligibleForAutoPostRelease,
+  releaseDealPayoutForDeal,
+} from '../lib/dealPayoutRelease.js';
+import {
+  getDealForPayoutRelease,
+  markDealPayoutReleased,
+} from '../lib/firestoreDeals.js';
+import { getConnectUrls } from '../lib/connectUrls.js';
+import {
+  getInfluencerStripeStatus,
+  reconcileStripeAccountId,
+  resolveStripeAccountId,
+} from '../lib/stripeAccountStatus.js';
 import { getUserStripeAccountId, saveUserStripeAccountId } from '../lib/firestoreUsers.js';
 import { requireAuth } from '../middleware/auth.js';
 
 const router = Router();
 
-function transferIdFromCharge(charge) {
-  if (!charge?.transfer) return null;
-  return typeof charge.transfer === 'string' ? charge.transfer : charge.transfer.id;
-}
+async function resolveInfluencerStripeAccountId(deal, paymentIntent) {
+  let influencerStripeAccountId =
+    paymentIntent.metadata?.influencerStripeAccountId ?? deal.influencerStripeAccountId;
 
-function isTransferAlreadyExistsError(error) {
-  const message = error?.message ?? '';
-  return (
-    message.includes('already a transfer using this source') ||
-    message.includes('must not exceed the source amount')
-  );
-}
-
-function isInsufficientFundsError(error) {
-  const message = error?.message ?? '';
-  return message.includes('insufficient available funds');
-}
-
-function rejectsSourceTransactionParam(error) {
-  const message = error?.message ?? '';
-  return message.includes('unknown parameter') && message.includes('source_transaction');
-}
-
-/**
- * Escrow payments need a manual transfer on post confirm. Legacy destination
- * charges already moved funds when the developer paid — detect and skip.
- */
-async function findExistingDealTransfer(stripe, { dealId, chargeId, influencerStripeAccountId }) {
-  const charge = await stripe.charges.retrieve(chargeId);
-  const fromCharge = transferIdFromCharge(charge);
-  if (fromCharge) {
-    return fromCharge;
-  }
-
-  const byGroup = await stripe.transfers.list({
-    transfer_group: dealId,
-    limit: 10,
-  });
-
-  if (byGroup.data.length > 0) {
-    const match =
-      byGroup.data.find((transfer) => transfer.destination === influencerStripeAccountId) ??
-      byGroup.data[0];
-    return match.id;
-  }
-
-  return null;
-}
-
-async function createDealTransfer(stripe, input, { useSourceTransaction }) {
-  const payload = {
-    amount: input.influencerPayoutAmount,
-    currency: input.currency,
-    destination: input.influencerStripeAccountId,
-    transfer_group: input.dealId,
-    metadata: {
-      dealId: input.dealId,
-      paymentIntentId: input.paymentIntentId,
-      developerId: input.developerId,
-    },
-  };
-
-  if (useSourceTransaction) {
-    payload.source_transaction = input.chargeId;
-  }
-
-  return stripe.transfers.create(payload);
-}
-
-async function resolveInfluencerTransfer(
-  stripe,
-  {
-    chargeId,
-    dealId,
-    paymentIntentId,
-    developerId,
-    influencerStripeAccountId,
-    influencerPayoutAmount,
-    currency,
-  },
-) {
-  const existingTransferId = await findExistingDealTransfer(stripe, {
-    dealId,
-    chargeId,
-    influencerStripeAccountId,
-  });
-
-  if (existingTransferId) {
-    return { transferId: existingTransferId, alreadyTransferred: true };
-  }
-
-  const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
-  if (paymentIntent.transfer_data?.destination) {
-    console.info('[release-deal-payout] Legacy destination charge — payout already sent at payment', {
-      dealId,
-      paymentIntentId,
-    });
-    return { transferId: null, alreadyTransferred: true };
-  }
-
-  const input = {
-    chargeId,
-    dealId,
-    paymentIntentId,
-    developerId,
-    influencerStripeAccountId,
-    influencerPayoutAmount,
-    currency,
-  };
-
-  let useSourceTransaction = true;
-
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const transfer = await createDealTransfer(stripe, input, { useSourceTransaction });
-      return { transferId: transfer.id, alreadyTransferred: false };
-    } catch (error) {
-      if (rejectsSourceTransactionParam(error)) {
-        useSourceTransaction = false;
-        continue;
-      }
-
-      if (isTransferAlreadyExistsError(error)) {
-        const retryTransferId = await findExistingDealTransfer(stripe, {
-          dealId,
-          chargeId,
-          influencerStripeAccountId,
-        });
-        if (retryTransferId) {
-          return { transferId: retryTransferId, alreadyTransferred: true };
-        }
-        return { transferId: null, alreadyTransferred: true };
-      }
-
-      if (isInsufficientFundsError(error) && useSourceTransaction) {
-        useSourceTransaction = false;
-        continue;
-      }
-
-      if (isInsufficientFundsError(error)) {
-        const charge = await stripe.charges.retrieve(chargeId);
-        if (transferIdFromCharge(charge)) {
-          return { transferId: transferIdFromCharge(charge), alreadyTransferred: true };
-        }
-      }
-
-      throw error;
+  if (deal.influencerId) {
+    const currentStripeAccountId = await getUserStripeAccountId(deal.influencerId);
+    if (currentStripeAccountId) {
+      influencerStripeAccountId = currentStripeAccountId;
     }
   }
 
-  throw new Error('Could not release payout — try again in a few minutes.');
+  return influencerStripeAccountId;
+}
+
+async function executeDealPayoutRelease(deal, influencerStripeAccountId, options = {}) {
+  const stripe = getStripe();
+  const { transferId, alreadyTransferred } = await releaseDealPayoutForDeal(
+    stripe,
+    deal,
+    influencerStripeAccountId,
+  );
+
+  await markDealPayoutReleased(deal.dealId, transferId, options);
+
+  return {
+    status: alreadyTransferred ? 'already_transferred' : 'released',
+    dealId: deal.dealId,
+    transferId,
+  };
 }
 
 /**
@@ -172,27 +63,29 @@ router.get('/influencer-stripe-account/:influencerId', requireAuth, async (req, 
       return res.status(400).json({ error: 'influencerId is required' });
     }
 
-    const stripeAccountId = await getUserStripeAccountId(influencerId);
-
-    return res.json({
-      influencerId,
-      stripeAccountId,
-      connected: Boolean(stripeAccountId),
-    });
+    const status = await getInfluencerStripeStatus(influencerId);
+    return res.json(status);
   } catch (error) {
     console.error('[influencer-stripe-account]', error);
     return res.status(500).json({ error: error.message ?? 'Failed to load Stripe account' });
   }
 });
 
-function getConnectUrls(body) {
-  const appUrl = process.env.APP_URL ?? 'http://localhost:3001';
-
-  return {
-    refreshUrl: body.refreshUrl ?? `${appUrl}/connect/refresh`,
-    returnUrl: body.returnUrl ?? `${appUrl}/connect/return`,
-  };
-}
+/**
+ * POST /reconcile-stripe-account
+ * Re-links the signed-in user to their best Stripe Connect account (by Firebase UID + email).
+ */
+router.post('/reconcile-stripe-account', requireAuth, async (req, res) => {
+  try {
+    const { email } = req.body ?? {};
+    await reconcileStripeAccountId(req.user.uid, email);
+    const status = await getInfluencerStripeStatus(req.user.uid);
+    return res.json(status);
+  } catch (error) {
+    console.error('[reconcile-stripe-account]', error);
+    return res.status(500).json({ error: error.message ?? 'Failed to reconcile Stripe account' });
+  }
+});
 
 /**
  * POST /create-account-link
@@ -232,7 +125,9 @@ router.post('/create-account-link', requireAuth, async (req, res) => {
     });
   } catch (error) {
     console.error('[create-account-link]', error);
-    return res.status(500).json({ error: error.message ?? 'Failed to create account link' });
+    const message = error.message ?? 'Failed to create account link';
+    const status = message.includes('HTTPS redirect URLs') ? 400 : 500;
+    return res.status(status).json({ error: message });
   }
 });
 
@@ -248,6 +143,27 @@ router.post('/create-connected-account', requireAuth, async (req, res) => {
 
     if (!email) {
       return res.status(400).json({ error: 'email is required' });
+    }
+
+    const existingAccountId = await resolveStripeAccountId(req.user.uid, email);
+    if (existingAccountId) {
+      const account = await stripe.accounts.retrieve(existingAccountId);
+      const accountLink = await stripe.accountLinks.create({
+        account: existingAccountId,
+        refresh_url: refreshUrl,
+        return_url: returnUrl,
+        type: 'account_onboarding',
+      });
+
+      await saveUserStripeAccountId(req.user.uid, existingAccountId);
+
+      return res.json({
+        accountId: existingAccountId,
+        onboardingUrl: accountLink.url,
+        expiresAt: accountLink.expires_at,
+        chargesEnabled: account.charges_enabled,
+        payoutsEnabled: account.payouts_enabled,
+      });
     }
 
     const account = await stripe.accounts.create({
@@ -278,7 +194,9 @@ router.post('/create-connected-account', requireAuth, async (req, res) => {
     });
   } catch (error) {
     console.error('[create-connected-account]', error);
-    return res.status(500).json({ error: error.message ?? 'Failed to create connected account' });
+    const message = error.message ?? 'Failed to create connected account';
+    const status = message.includes('HTTPS redirect URLs') ? 400 : 500;
+    return res.status(status).json({ error: message });
   }
 });
 
@@ -348,7 +266,6 @@ router.post('/create-payment-intent', requireAuth, async (req, res) => {
  */
 router.post('/release-deal-payout', requireAuth, async (req, res) => {
   try {
-    const stripe = getStripe();
     const { dealId } = req.body ?? {};
 
     if (!dealId) {
@@ -376,58 +293,84 @@ router.post('/release-deal-payout', requireAuth, async (req, res) => {
       });
     }
 
+    const stripe = getStripe();
     const paymentIntent = await stripe.paymentIntents.retrieve(deal.paymentIntentId);
-
-    if (paymentIntent.status !== 'succeeded') {
-      return res.status(400).json({
-        error: `Payment is not complete (status: ${paymentIntent.status})`,
-      });
-    }
-
-    const influencerStripeAccountId =
-      paymentIntent.metadata?.influencerStripeAccountId ?? deal.influencerStripeAccountId;
-    const influencerPayoutAmount = Number(
-      paymentIntent.metadata?.influencerPayoutAmount ?? deal.influencerPayoutAmount,
-    );
+    const influencerStripeAccountId = await resolveInfluencerStripeAccountId(deal, paymentIntent);
 
     if (!influencerStripeAccountId) {
       return res.status(400).json({ error: 'Influencer Stripe account is missing' });
     }
 
-    if (!Number.isFinite(influencerPayoutAmount) || influencerPayoutAmount < 50) {
-      return res.status(400).json({ error: 'Invalid influencer payout amount' });
-    }
-
-    const chargeId =
-      typeof paymentIntent.latest_charge === 'string'
-        ? paymentIntent.latest_charge
-        : paymentIntent.latest_charge?.id;
-
-    if (!chargeId) {
-      return res.status(400).json({ error: 'Payment charge not found' });
-    }
-
-    const { transferId, alreadyTransferred } = await resolveInfluencerTransfer(stripe, {
-      chargeId,
-      dealId,
-      paymentIntentId: paymentIntent.id,
-      developerId: req.user.uid,
-      influencerStripeAccountId,
-      influencerPayoutAmount,
-      currency: paymentIntent.currency ?? 'usd',
+    const result = await executeDealPayoutRelease(deal, influencerStripeAccountId, {
+      markCompleted: true,
     });
 
-    await markDealPayoutReleased(dealId, transferId);
-
-    return res.json({
-      status: alreadyTransferred ? 'already_transferred' : 'released',
-      dealId,
-      transferId,
-      influencerPayoutAmount,
-    });
+    return res.json(result);
   } catch (error) {
     console.error('[release-deal-payout]', error);
     return res.status(500).json({ error: error.message ?? 'Failed to release deal payout' });
+  }
+});
+
+/**
+ * POST /auto-release-deal-payout
+ * Influencer-triggered release after the developer misses the 3-day post confirmation window.
+ */
+router.post('/auto-release-deal-payout', requireAuth, async (req, res) => {
+  try {
+    const { dealId } = req.body ?? {};
+
+    if (!dealId) {
+      return res.status(400).json({ error: 'dealId is required' });
+    }
+
+    const deal = await getDealForPayoutRelease(dealId);
+    if (!deal) {
+      return res.status(404).json({ error: 'Deal not found' });
+    }
+
+    if (deal.influencerId !== req.user.uid) {
+      return res.status(403).json({ error: 'Not authorized to auto-release this payout' });
+    }
+
+    if (!deal.paymentIntentId) {
+      return res.status(400).json({ error: 'Deal has no payment on file' });
+    }
+
+    if (deal.paymentStatus === 'released' || deal.paymentStatus === 'withdrawn') {
+      return res.json({
+        status: 'already_released',
+        dealId,
+        transferId: deal.stripeTransferId ?? null,
+      });
+    }
+
+    if (!isDealEligibleForAutoPostRelease(deal)) {
+      return res.status(400).json({
+        error: 'Payout auto-release is not available yet. The developer has 3 days to confirm the post.',
+      });
+    }
+
+    const stripe = getStripe();
+    const paymentIntent = await stripe.paymentIntents.retrieve(deal.paymentIntentId);
+    const influencerStripeAccountId = await resolveInfluencerStripeAccountId(deal, paymentIntent);
+
+    if (!influencerStripeAccountId) {
+      return res.status(400).json({ error: 'Influencer Stripe account is missing' });
+    }
+
+    const result = await executeDealPayoutRelease(deal, influencerStripeAccountId, {
+      markCompleted: true,
+      autoReleased: true,
+    });
+
+    return res.json({
+      ...result,
+      autoReleased: true,
+    });
+  } catch (error) {
+    console.error('[auto-release-deal-payout]', error);
+    return res.status(500).json({ error: error.message ?? 'Failed to auto-release deal payout' });
   }
 });
 
@@ -574,6 +517,50 @@ router.post('/create-pack-payment-intent', requireAuth, async (req, res) => {
   } catch (error) {
     console.error('[create-pack-payment-intent]', error);
     return res.status(500).json({ error: error.message ?? 'Failed to create pack payment intent' });
+  }
+});
+
+/**
+ * POST /create-contest-payment-intent
+ * Developer funds a CPM contest prize pool — charged directly to Fase.
+ */
+router.post('/create-contest-payment-intent', requireAuth, async (req, res) => {
+  try {
+    const stripe = getStripe();
+    const { amount, currency = 'usd', contestId, description } = req.body ?? {};
+
+    if (!amount || amount < 10000) {
+      return res.status(400).json({ error: 'amount (cents) must be at least 10000 ($100 minimum)' });
+    }
+
+    if (!contestId) {
+      return res.status(400).json({ error: 'contestId is required' });
+    }
+
+    const amountCents = Math.round(amount);
+
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: amountCents,
+      currency,
+      automatic_payment_methods: { enabled: true },
+      description: description ?? `Fase contest ${contestId}`,
+      metadata: {
+        type: 'contest',
+        contestId,
+        developerId: req.user.uid,
+      },
+    });
+
+    return res.json({
+      paymentIntentId: paymentIntent.id,
+      clientSecret: paymentIntent.client_secret,
+      publishableKey: getPublishableKey(),
+      status: paymentIntent.status,
+      amount: amountCents,
+    });
+  } catch (error) {
+    console.error('[create-contest-payment-intent]', error);
+    return res.status(500).json({ error: error.message ?? 'Failed to create contest payment intent' });
   }
 });
 

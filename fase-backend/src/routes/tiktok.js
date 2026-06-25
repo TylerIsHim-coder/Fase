@@ -1,8 +1,8 @@
 import { Router } from 'express';
 
-import { requireAuth } from '../middleware/auth.js';
 import { exchangeTikTokAuthorizationCode, fetchTikTokUserProfile } from '../lib/tiktok.js';
 import { saveTikTokConnectionForUser } from '../lib/tiktokUserProfile.js';
+import { requireAuth } from '../middleware/auth.js';
 
 const router = Router();
 

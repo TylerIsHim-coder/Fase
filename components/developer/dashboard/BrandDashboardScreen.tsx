@@ -20,7 +20,9 @@ import { useAuth, useCurrentDeveloperId } from '@/context/AuthContext';
 import { useCampaigns } from '@/context/CampaignsContext';
 import { useDeveloperFollowers } from '@/context/DeveloperFollowersContext';
 import { useDeveloperProfile } from '@/context/DeveloperProfileContext';
+import { useNotifications } from '@/context/NotificationsContext';
 import { usePitches } from '@/context/PitchesContext';
+import { isDeveloperActivityNotification } from '@/lib/campaignActivityNotifications';
 import {
   brandPulseCounts,
   brandStatusPillText,
@@ -51,6 +53,7 @@ export function BrandDashboardScreen({ onCreateCampaign }: BrandDashboardScreenP
   const { campaigns } = useCampaigns();
   const { deals } = usePitches();
   const { getFollowerCount } = useDeveloperFollowers();
+  const { notifications } = useNotifications();
 
   const [hasInvitedFlag, setHasInvitedFlag] = useState(false);
 
@@ -101,6 +104,13 @@ export function BrandDashboardScreen({ onCreateCampaign }: BrandDashboardScreenP
   );
 
   const followerCount = getFollowerCount(developerId);
+
+  const activityUnreadCount = useMemo(
+    () =>
+      notifications.filter((item) => isDeveloperActivityNotification(item.type) && !item.read)
+        .length,
+    [notifications],
+  );
 
   const pulse = useMemo(
     () =>
@@ -159,6 +169,25 @@ export function BrandDashboardScreen({ onCreateCampaign }: BrandDashboardScreenP
     () => router.navigate('/(developer)/(tabs)/discover' as Href),
     [router],
   );
+  const goFollowers = useCallback(
+    () => router.push('/(developer)/followers' as Href),
+    [router],
+  );
+  const goActivity = useCallback(
+    () => router.push('/(developer)/activity' as Href),
+    [router],
+  );
+
+  // Campaigns and shop-link both dead-end at an empty grid with no way to create
+  // a campaign from there (that stack screen has no tab bar/+), so route straight
+  // to the create modal whenever the brand has zero published campaigns.
+  const goCampaignsOrCreate = useCallback(() => {
+    if (publishedCampaigns.length === 0) {
+      onCreateCampaign();
+    } else {
+      goCampaigns();
+    }
+  }, [goCampaigns, onCreateCampaign, publishedCampaigns.length]);
 
   const handleGettingStartedPress = useCallback(
     (id: BrandGettingStartedId) => {
@@ -167,21 +196,15 @@ export function BrandDashboardScreen({ onCreateCampaign }: BrandDashboardScreenP
           goProfile();
           break;
         case 'campaign':
-          if (publishedCampaigns.length === 0) {
-            onCreateCampaign();
-          } else {
-            goCampaigns();
-          }
-          break;
         case 'shop-link':
-          goCampaigns();
+          goCampaignsOrCreate();
           break;
         case 'invite':
           goDiscover();
           break;
       }
     },
-    [goProfile, goCampaigns, goDiscover, onCreateCampaign, publishedCampaigns.length],
+    [goProfile, goCampaignsOrCreate, goDiscover],
   );
 
   const photoUri = isUserUploadedPhotoUrl(profile.photoUrl) ? profile.photoUrl : undefined;
@@ -213,6 +236,15 @@ export function BrandDashboardScreen({ onCreateCampaign }: BrandDashboardScreenP
               {displayName || 'Brand'}
             </Text>
           </View>
+
+          <Pressable
+            style={styles.iconButton}
+            onPress={goActivity}
+            accessibilityRole="button"
+            accessibilityLabel="Open activity">
+            <Feather name="bell" size={20} color={colors.text} />
+            {activityUnreadCount > 0 ? <View style={styles.iconButtonBadge} /> : null}
+          </Pressable>
 
           <Pressable
             style={styles.avatar}
@@ -277,10 +309,10 @@ export function BrandDashboardScreen({ onCreateCampaign }: BrandDashboardScreenP
                 <Text style={styles.heroMetricLabel}>Open{'\n'}pitches</Text>
               </Pressable>
               <View style={styles.heroDivider} />
-              <View style={styles.heroMetric}>
+              <Pressable style={styles.heroMetric} onPress={goFollowers} accessibilityRole="button">
                 <Text style={styles.heroMetricValue}>{pulse.followers}</Text>
                 <Text style={styles.heroMetricLabel}>Followers</Text>
-              </View>
+              </Pressable>
             </View>
           </View>
         </View>
@@ -320,7 +352,10 @@ export function BrandDashboardScreen({ onCreateCampaign }: BrandDashboardScreenP
             <Text style={styles.actionCardValue}>{newPitchCount}</Text>
             <Text style={styles.actionCardLabel}>Pitches waiting</Text>
           </Pressable>
-          <Pressable style={styles.actionCard} onPress={goCampaigns} accessibilityRole="button">
+          <Pressable
+            style={styles.actionCard}
+            onPress={goCampaignsOrCreate}
+            accessibilityRole="button">
             <Text style={styles.actionCardValue}>{publishedCampaigns.length}</Text>
             <Text style={styles.actionCardLabel}>Your campaigns</Text>
           </Pressable>
@@ -400,6 +435,27 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.text,
     letterSpacing: -0.4,
+  },
+  iconButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: CARD_BORDER,
+  },
+  iconButtonBadge: {
+    position: 'absolute',
+    top: 9,
+    right: 10,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: colors.accent,
+    borderWidth: 1.5,
+    borderColor: '#FFFFFF',
   },
   avatar: {
     width: 48,

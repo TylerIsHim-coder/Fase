@@ -13,6 +13,10 @@ export default function DeveloperDashboardTab() {
     setModalVisible(true);
   }, []);
 
+  // Re-register on every focus (a useFocusEffect, unlike campaigns.tsx's mount-only
+  // useEffect) so the center `+` keeps working here after visiting Campaigns, whose
+  // unmount clears the action via its own cleanup and would otherwise leave the
+  // Dashboard's `+` dead until a full remount.
   useFocusEffect(
     useCallback(() => {
       registerCenterAction(openModal);

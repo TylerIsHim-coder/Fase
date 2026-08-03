@@ -87,7 +87,7 @@ interface PitchesContextValue {
     creator: CreatorBrowseProfile,
     campaign: Campaign,
     developerId: string,
-  ) => void;
+  ) => boolean;
   markDealCompleted: (dealId: string) => Promise<boolean>;
   submitCounterOffer: (dealId: string, amount: number) => boolean;
   acceptPitchOffer: (dealId: string) => boolean;
@@ -714,10 +714,11 @@ export function PitchesProvider({ children }: { children: ReactNode }) {
   );
 
   const submitBookingRequest = useCallback(
-    (creator: CreatorBrowseProfile, campaign: Campaign, developerId: string) => {
-      if (!developerId) return;
+    (creator: CreatorBrowseProfile, campaign: Campaign, developerId: string): boolean => {
+      if (!developerId) return false;
 
       let savedDeal: Deal | undefined;
+      let success = false;
 
       setDeals((prev) => {
         const bookingId = buildPitchDealId(campaign.id, creator.id);
@@ -730,6 +731,7 @@ export function PitchesProvider({ children }: { children: ReactNode }) {
           : [nextDeal, ...prev];
 
         savedDeal = existing ? { ...nextDeal, id: bookingId } : nextDeal;
+        success = true;
         persistDeals(next);
         return next;
       });
@@ -737,6 +739,8 @@ export function PitchesProvider({ children }: { children: ReactNode }) {
       if (savedDeal) {
         void persistDeal(savedDeal);
       }
+
+      return success;
     },
     [persistDeal, persistDeals],
   );

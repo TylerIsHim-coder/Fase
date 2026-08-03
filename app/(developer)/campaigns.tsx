@@ -207,13 +207,22 @@ export default function DeveloperCampaignsScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.topBar}>
-        <Pressable onPress={handleBack} hitSlop={12} style={styles.iconBtn}>
-          <Feather name="chevron-left" size={26} color={colors.text} />
-        </Pressable>
+        <View style={styles.topBarSide}>
+          <Pressable onPress={handleBack} hitSlop={12} style={styles.iconBtn}>
+            <Feather name="chevron-left" size={26} color={colors.text} />
+          </Pressable>
+        </View>
         <Text style={styles.title}>Campaigns</Text>
-        <Pressable onPress={() => setMenuVisible(true)} hitSlop={12} style={styles.iconBtn}>
-          <Feather name="menu" size={22} color={colors.text} />
-        </Pressable>
+        <View style={[styles.topBarSide, styles.topBarActions]}>
+          {/* This screen has no tab bar, so the center `+` is unreachable here — expose a
+              real button instead of relying on the (invisible) floating create action. */}
+          <Pressable onPress={openModal} hitSlop={12} style={styles.iconBtn}>
+            <Feather name="plus" size={22} color={colors.text} />
+          </Pressable>
+          <Pressable onPress={() => setMenuVisible(true)} hitSlop={12} style={styles.iconBtn}>
+            <Feather name="menu" size={22} color={colors.text} />
+          </Pressable>
+        </View>
       </View>
 
       <ScrollView
@@ -226,7 +235,8 @@ export default function DeveloperCampaignsScreen() {
           onCellPress={openReel}
           onCellLongPress={handleRemoveCampaign}
           emptyTitle="No campaigns yet"
-          emptySubtitle="Tap + to post your first clip"
+          emptySubtitle="Tap to post your first clip"
+          onEmptyPress={openModal}
         />
 
         <DeveloperContestSection
@@ -277,7 +287,7 @@ export default function DeveloperCampaignsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.background,
   },
   topBar: {
     flexDirection: 'row',
@@ -285,6 +295,15 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.md,
+  },
+  topBarSide: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 40,
+  },
+  topBarActions: {
+    justifyContent: 'flex-end',
   },
   iconBtn: {
     width: 40,
@@ -295,5 +314,7 @@ const styles = StyleSheet.create({
   title: {
     ...typography.cardTitle,
     fontSize: 18,
+    flex: 1,
+    textAlign: 'center',
   },
 });

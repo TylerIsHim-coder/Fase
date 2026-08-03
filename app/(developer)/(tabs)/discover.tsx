@@ -34,7 +34,14 @@ export default function DiscoverTab() {
 
   const handleSubmit = useCallback(
     (creator: CreatorBrowseProfile, campaign: Campaign) => {
-      submitBookingRequest(creator, campaign, developerId);
+      const success = submitBookingRequest(creator, campaign, developerId);
+      if (!success) {
+        Alert.alert(
+          'Could not send invite',
+          `${creator.name} already has an active deal for ${campaign.name}.`,
+        );
+        return;
+      }
 
       const uid = user?.uid;
       if (uid) {

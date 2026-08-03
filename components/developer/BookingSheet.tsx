@@ -1,5 +1,4 @@
 import { Feather } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
 import { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
@@ -53,7 +52,8 @@ export function BookingSheet({
       Alert.alert('No campaigns', 'Create an active campaign before inviting a creator.');
       return;
     }
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    // Haptic + success/failure feedback lives in the caller's onSubmit, which knows
+    // whether the booking actually succeeded (avoids firing it twice).
     onSubmit(creator, selectedCampaign);
     onClose();
   };

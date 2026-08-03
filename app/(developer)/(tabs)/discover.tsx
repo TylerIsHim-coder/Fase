@@ -34,6 +34,14 @@ export default function DiscoverTab() {
 
   const handleSubmit = useCallback(
     (creator: CreatorBrowseProfile, campaign: Campaign) => {
+      if (!developerId) {
+        Alert.alert(
+          'Could not send invite',
+          'Your brand profile is still loading. Please try again in a moment.',
+        );
+        return;
+      }
+
       const success = submitBookingRequest(creator, campaign, developerId);
       if (!success) {
         Alert.alert(

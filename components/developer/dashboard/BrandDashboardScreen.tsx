@@ -34,7 +34,7 @@ import {
 } from '@/lib/brandDashboard';
 import { loadBrandHasInvitedCreator } from '@/lib/brandInviteStorage';
 import { formatCurrencyAmount } from '@/lib/dealPayment';
-import { getDeveloperCampaigns } from '@/lib/developers';
+import { followerLookupDeveloperIds, getDeveloperCampaigns } from '@/lib/developers';
 import { getDeveloperPaidDeals, getDeveloperPitches } from '@/lib/getDeveloperPitches';
 import { isUserUploadedPhotoUrl } from '@/lib/profilePhoto';
 
@@ -52,7 +52,7 @@ export function BrandDashboardScreen({ onCreateCampaign }: BrandDashboardScreenP
   const { displayName, profile } = useDeveloperProfile();
   const { campaigns } = useCampaigns();
   const { deals } = usePitches();
-  const { getFollowerCount } = useDeveloperFollowers();
+  const { getFollowerCountForLookup } = useDeveloperFollowers();
   const { notifications } = useNotifications();
 
   const [hasInvitedFlag, setHasInvitedFlag] = useState(false);
@@ -103,7 +103,12 @@ export function BrandDashboardScreen({ onCreateCampaign }: BrandDashboardScreenP
     [pitches],
   );
 
-  const followerCount = getFollowerCount(developerId);
+  const followerLookupIds = useMemo(
+    () => followerLookupDeveloperIds(developerId, campaigns),
+    [campaigns, developerId],
+  );
+
+  const followerCount = getFollowerCountForLookup(followerLookupIds);
 
   const activityUnreadCount = useMemo(
     () =>
@@ -129,14 +134,13 @@ export function BrandDashboardScreen({ onCreateCampaign }: BrandDashboardScreenP
         hasDisplayName: Boolean(displayName?.trim()),
         campaignCount: publishedCampaigns.length,
         hasCampaignShopLink: campaignsHaveShopLink(developerCampaigns),
-        hasInvitedCreator: pitches.length > 0 || hasInvitedFlag,
+        hasInvitedCreator: hasInvitedFlag,
       }),
     [
       profile.photoUrl,
       displayName,
       publishedCampaigns.length,
       developerCampaigns,
-      pitches.length,
       hasInvitedFlag,
     ],
   );
@@ -178,17 +182,6 @@ export function BrandDashboardScreen({ onCreateCampaign }: BrandDashboardScreenP
     [router],
   );
 
-  // Campaigns and shop-link both dead-end at an empty grid with no way to create
-  // a campaign from there (that stack screen has no tab bar/+), so route straight
-  // to the create modal whenever the brand has zero published campaigns.
-  const goCampaignsOrCreate = useCallback(() => {
-    if (publishedCampaigns.length === 0) {
-      onCreateCampaign();
-    } else {
-      goCampaigns();
-    }
-  }, [goCampaigns, onCreateCampaign, publishedCampaigns.length]);
-
   const handleGettingStartedPress = useCallback(
     (id: BrandGettingStartedId) => {
       switch (id) {
@@ -197,14 +190,14 @@ export function BrandDashboardScreen({ onCreateCampaign }: BrandDashboardScreenP
           break;
         case 'campaign':
         case 'shop-link':
-          goCampaignsOrCreate();
+          goCampaigns();
           break;
         case 'invite':
           goDiscover();
           break;
       }
     },
-    [goProfile, goCampaignsOrCreate, goDiscover],
+    [goProfile, goCampaigns, goDiscover],
   );
 
   const photoUri = isUserUploadedPhotoUrl(profile.photoUrl) ? profile.photoUrl : undefined;
@@ -354,7 +347,7 @@ export function BrandDashboardScreen({ onCreateCampaign }: BrandDashboardScreenP
           </Pressable>
           <Pressable
             style={styles.actionCard}
-            onPress={goCampaignsOrCreate}
+            onPress={goCampaigns}
             accessibilityRole="button">
             <Text style={styles.actionCardValue}>{publishedCampaigns.length}</Text>
             <Text style={styles.actionCardLabel}>Your campaigns</Text>

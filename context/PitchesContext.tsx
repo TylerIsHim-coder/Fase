@@ -717,30 +717,24 @@ export function PitchesProvider({ children }: { children: ReactNode }) {
     (creator: CreatorBrowseProfile, campaign: Campaign, developerId: string): boolean => {
       if (!developerId) return false;
 
-      let savedDeal: Deal | undefined;
-      let success = false;
+      const bookingId = buildPitchDealId(campaign.id, creator.id);
+      const existing = dealsRef.current.find((deal) => deal.id === bookingId);
+      if (existing && isDealInProgress(existing)) return false;
+
+      const nextDeal = creatorBookingToPendingDeal(creator, campaign, developerId);
+      const savedDeal: Deal = existing ? { ...nextDeal, id: bookingId } : nextDeal;
 
       setDeals((prev) => {
-        const bookingId = buildPitchDealId(campaign.id, creator.id);
-        const existing = prev.find((deal) => deal.id === bookingId);
-        if (existing && isDealInProgress(existing)) return prev;
-
-        const nextDeal = creatorBookingToPendingDeal(creator, campaign, developerId);
         const next = existing
-          ? prev.map((deal) => (deal.id === bookingId ? { ...nextDeal, id: bookingId } : deal))
-          : [nextDeal, ...prev];
-
-        savedDeal = existing ? { ...nextDeal, id: bookingId } : nextDeal;
-        success = true;
+          ? prev.map((deal) => (deal.id === bookingId ? savedDeal : deal))
+          : [savedDeal, ...prev];
         persistDeals(next);
         return next;
       });
 
-      if (savedDeal) {
-        void persistDeal(savedDeal);
-      }
+      void persistDeal(savedDeal);
 
-      return success;
+      return true;
     },
     [persistDeal, persistDeals],
   );

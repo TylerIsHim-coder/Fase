@@ -39,6 +39,10 @@ assert.deepEqual(
   brandPulseCounts({ activeCampaigns: 2, openPitches: 4, followers: 10 }),
   { activeCampaigns: 2, openPitches: 4, followers: 10 },
 );
+assert.deepEqual(
+  brandPulseCounts({ activeCampaigns: -1, openPitches: -3, followers: -5 }),
+  { activeCampaigns: 0, openPitches: 0, followers: 0 },
+);
 
 const now = Date.now();
 const paidFixturesWithinAndOutside30d = [

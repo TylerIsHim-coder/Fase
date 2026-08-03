@@ -3,7 +3,10 @@ import {
   POST_CONFIRMATION_AUTO_RELEASE_MS,
   POST_CONFIRMATION_AUTO_RELEASE_DAYS,
 } from '@/lib/dealAutoRelease';
+import { isDealPaidByDeveloper } from '@/lib/dealPaidStatus';
 import type { Deal } from '@/types';
+
+export { isDealPaidByDeveloper } from '@/lib/dealPaidStatus';
 
 export { POST_CONFIRMATION_AUTO_RELEASE_DAYS, POST_CONFIRMATION_AUTO_RELEASE_MS };
 export const PLATFORM_FEE_RATE = 0.08;
@@ -106,15 +109,6 @@ export function isDealAvailableToWithdraw(deal: Deal): boolean {
     isDealPayoutReleased(deal) &&
     isDealPostConfirmed(deal) &&
     !isDealCashedOut(deal)
-  );
-}
-
-export function isDealPaidByDeveloper(deal: Deal): boolean {
-  return (
-    Boolean(deal.paymentIntentId) ||
-    deal.paymentStatus === 'held' ||
-    deal.paymentStatus === 'released' ||
-    deal.paymentStatus === 'withdrawn'
   );
 }
 

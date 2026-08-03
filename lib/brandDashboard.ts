@@ -1,14 +1,5 @@
+import { isDealPaidByDeveloper } from '@/lib/dealPaidStatus';
 import type { Deal } from '@/types';
-
-/** Same rules as `isDealPaidByDeveloper` in lib/dealPayment (local for tsx verify scripts). */
-export function isPaidForDashboard(deal: Deal): boolean {
-  return (
-    Boolean(deal.paymentIntentId) ||
-    deal.paymentStatus === 'held' ||
-    deal.paymentStatus === 'released' ||
-    deal.paymentStatus === 'withdrawn'
-  );
-}
 
 export function brandStatusPillText(newPitchCount: number): string {
   if (newPitchCount <= 0) return "You're all caught up.";
@@ -76,7 +67,7 @@ export function brandPulseCounts(input: BrandPulseCounts): BrandPulseCounts {
 export function developerSpendInLastDays(deals: Deal[], days: number): number {
   const start = Date.now() - days * 24 * 60 * 60 * 1000;
   return deals
-    .filter((deal) => isPaidForDashboard(deal))
+    .filter((deal) => isDealPaidByDeveloper(deal))
     .reduce((sum, deal) => {
       const ts = deal.paidAt ? Date.parse(deal.paidAt) : 0;
       if (!ts || ts < start) return sum;
@@ -94,7 +85,7 @@ export interface BrandTopCreator {
 export function topCreatorsFromPaidDeals(deals: Deal[], limit = 3): BrandTopCreator[] {
   const map = new Map<string, BrandTopCreator>();
   for (const deal of deals) {
-    if (!isPaidForDashboard(deal) || !deal.influencerId) continue;
+    if (!isDealPaidByDeveloper(deal) || !deal.influencerId) continue;
     const existing = map.get(deal.influencerId);
     const amount = deal.amount ?? 0;
     if (existing) {
